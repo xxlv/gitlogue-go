@@ -1,0 +1,25 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/gitlogue
+/gitlogue-go
+
+# Test & coverage
+*.test
+*.out
+coverage.html
+
+# Go workspace (local)
+go.work
+go.work.sum
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
