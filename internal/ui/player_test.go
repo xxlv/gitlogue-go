@@ -115,6 +115,83 @@ func TestTreeRowsNested(t *testing.T) {
 	}
 }
 
+func TestTreeCursorPlayed(t *testing.T) {
+	t.Parallel()
+	if got := treeCursor(true, false); got != "▸" {
+		t.Fatalf("playing = %q, want ▸", got)
+	}
+	if got := treeCursor(false, true); got != "✓" {
+		t.Fatalf("played = %q, want ✓", got)
+	}
+	if got := treeCursor(true, true); got != "✓" {
+		t.Fatalf("playhead after done = %q, want ✓", got)
+	}
+	if got := treeCursor(false, false); got != " " {
+		t.Fatalf("upcoming = %q, want space", got)
+	}
+}
+
+func TestPlayedFilesMarkedInTree(t *testing.T) {
+	t.Parallel()
+	script := animator.Script{
+		Commit: "abc1234",
+		Actions: []animator.Action{
+			{Kind: animator.KindOpenFile, File: "a.go", Delay: time.Millisecond},
+			{Kind: animator.KindTypeChar, File: "a.go", Row: 1, Col: 0, Rune: 'x', Delay: 80 * time.Millisecond},
+			{Kind: animator.KindOpenFile, File: "b.go", Delay: time.Millisecond},
+			{Kind: animator.KindTypeChar, File: "b.go", Row: 1, Col: 0, Rune: 'y', Delay: time.Millisecond},
+		},
+	}
+	diff := &gitengine.CommitDiff{
+		Files: []gitengine.FileChange{
+			{Path: "a.go", Kind: gitengine.ChangeAdded},
+			{Path: "b.go", Kind: gitengine.ChangeAdded},
+			{Path: "c.go", Kind: gitengine.ChangeAdded},
+		},
+	}
+	m := NewPlayer(script, diff, scheduler.Options{FPS: 60, MaxStep: time.Second}, "")
+	m.width, m.height = 100, 24
+
+	now := time.Unix(0, 0).UTC()
+	updated, _ := m.Update(scheduler.FrameMsg{Time: now})
+	m = updated.(Model)
+	if m.filePlayed("a.go") {
+		t.Fatal("a.go should still be playing after the first frame")
+	}
+	if m.filePlayed("c.go") {
+		t.Fatal("c.go is not in the script")
+	}
+	view := m.View()
+	if !strings.Contains(view, "▸") {
+		t.Fatalf("playhead should show ▸ while typing:\n%s", view)
+	}
+
+	updated, _ = m.Update(scheduler.FrameMsg{Time: now.Add(200 * time.Millisecond)})
+	m = updated.(Model)
+	if !m.sched.Done() {
+		t.Fatal("expected both files to finish")
+	}
+	if !m.filePlayed("a.go") || !m.filePlayed("b.go") {
+		t.Fatalf("played a=%v b=%v, want both true", m.filePlayed("a.go"), m.filePlayed("b.go"))
+	}
+	if m.filePlayed("c.go") {
+		t.Fatal("untouched c.go should not be marked")
+	}
+	view = m.View()
+	if !strings.Contains(view, "✓") {
+		t.Fatalf("finished files should show ✓:\n%s", view)
+	}
+	if strings.Contains(view, "▸") {
+		t.Fatalf("no playhead arrow after the commit is done:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(Model)
+	if m.filePlayed("a.go") || m.filePlayed("b.go") {
+		t.Fatal("restart should clear played marks")
+	}
+}
+
 func TestWithCaret(t *testing.T) {
 	t.Parallel()
 	if got := withCaret("ab", 1, true); !strings.Contains(got, "a") {
@@ -322,6 +399,85 @@ func TestHOriginKeepsCaretInView(t *testing.T) {
 	}
 	if got := hOrigin(100, 40); got != 63 {
 		t.Fatalf("far caret origin = %d, want 63", got)
+	}
+}
+
+func TestScrollWindowClamps(t *testing.T) {
+	t.Parallel()
+	from, to := scrollWindow(0, 10, 20)
+	if from != 0 || to != 10 {
+		t.Fatalf("short file = [%d, %d), want [0, 10)", from, to)
+	}
+	from, to = scrollWindow(100, 40, 10)
+	if from != 30 || to != 40 {
+		t.Fatalf("past end = [%d, %d), want [30, 40)", from, to)
+	}
+	from, to = scrollWindow(-3, 40, 10)
+	if from != 0 || to != 10 {
+		t.Fatalf("negative off = [%d, %d), want [0, 10)", from, to)
+	}
+}
+
+func TestEditorScrollsAfterPlayback(t *testing.T) {
+	t.Parallel()
+	const n = 40
+	lines := make([]string, n)
+	lines[0] = "LINE_AAA_HEAD"
+	for i := 1; i < n-1; i++ {
+		lines[i] = "mid"
+	}
+	lines[n-1] = "LINE_ZZZ_TAIL"
+	old := strings.Join(lines, "\n") + "\n"
+
+	m := NewPlayer(animator.Script{
+		Commit: "abc1234",
+		Actions: []animator.Action{
+			{Kind: animator.KindOpenFile, File: "long.go", Delay: time.Millisecond},
+			{Kind: animator.KindTypeChar, File: "long.go", Row: n, Col: len(lines[n-1]), Rune: '!', Delay: time.Millisecond},
+		},
+	}, &gitengine.CommitDiff{
+		Files: []gitengine.FileChange{{Path: "long.go", Kind: gitengine.ChangeModified, OldContent: old}},
+	}, scheduler.Options{FPS: 60, MaxStep: time.Second}, "")
+	m.width, m.height = 80, 24
+
+	now := time.Unix(0, 0).UTC()
+	updated, _ := m.Update(scheduler.FrameMsg{Time: now})
+	m = updated.(Model)
+	if !m.sched.Done() {
+		t.Fatal("expected playback to finish in one catch-up frame")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "LINE_ZZZ_TAIL") {
+		t.Fatalf("finished playback should keep the caret line in view:\n%s", view)
+	}
+	if strings.Contains(view, "LINE_AAA_HEAD") {
+		t.Fatalf("first line should be scrolled off until the user scrolls:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = updated.(Model)
+	view = m.View()
+	if !strings.Contains(view, "LINE_AAA_HEAD") {
+		t.Fatalf("Home should reveal the first line:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = updated.(Model)
+	view = m.View()
+	if !strings.Contains(view, "LINE_ZZZ_TAIL") {
+		t.Fatalf("End should return to the last line:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.MouseMsg{
+		X:      40,
+		Y:      10,
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	m = updated.(Model)
+	if m.editOff == m.editorMaxOff() {
+		t.Fatal("wheel up should move the editor off the last line")
 	}
 }
 

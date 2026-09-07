@@ -48,6 +48,8 @@ gitlogue --inspect --script --seed 1
 | `j` / `-` / `←` | Half speed |
 | `k` / `+` / `→` | Double speed |
 | `Tab` / `↑` / `↓` | Move focus in the file tree (pauses) |
+| `PgUp` / `PgDn` | Scroll the editor. Mouse wheel over the file pane does the same |
+| `Home` / `End` | Jump to the top / bottom of the open file |
 | `n` / `p` | Next / previous changed file |
 | `]` / `[` | Next / previous commit |
 | `r` | Restart the current commit (whole track, not one file) |

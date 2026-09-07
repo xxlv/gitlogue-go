@@ -71,17 +71,41 @@ func (m *Model) install(i int) {
 	m.between = false
 	m.gapLeft = 0
 	m.fileReplay = false
+	m.editOff = 0
+	m.played = make(map[string]struct{})
 }
 
 func (m *Model) applyDue(due []animator.Action) {
 	for _, a := range due {
+		prev := m.playheadPath()
 		m.stage.Apply(a)
+		if next := m.playheadPath(); prev != "" && next != "" && prev != next {
+			m.markPlayed(prev)
+		}
 	}
 	if !m.browsing {
 		if buf := m.stage.Current(); buf != nil {
 			m.selected = buf.Path()
 		}
 	}
+	if m.sched != nil && m.sched.Done() {
+		m.markPlayed(m.playheadPath())
+	}
+}
+
+func (m *Model) markPlayed(path string) {
+	if path == "" {
+		return
+	}
+	if m.played == nil {
+		m.played = make(map[string]struct{})
+	}
+	m.played[path] = struct{}{}
+}
+
+func (m Model) filePlayed(path string) bool {
+	_, ok := m.played[path]
+	return ok
 }
 
 func (m *Model) tickPlayback(dt time.Duration) {
@@ -142,6 +166,8 @@ func (m *Model) restart() {
 		}
 		m.browsing = false
 		m.selected = ""
+		m.editOff = 0
+		m.played = make(map[string]struct{})
 		return
 	}
 	m.install(m.idx)
@@ -179,6 +205,9 @@ func (m *Model) moveTree(delta int) {
 	}
 	if idx >= len(paths) {
 		idx = len(paths) - 1
+	}
+	if paths[idx] != m.selected {
+		m.editOff = 0
 	}
 	m.selected = paths[idx]
 }
@@ -246,6 +275,10 @@ func (m *Model) replayFile(path string) {
 	m.browsing = false
 	m.selected = path
 	m.fileReplay = true
+	m.editOff = 0
+	if m.played != nil {
+		delete(m.played, path)
+	}
 	m.between = false
 	m.gapLeft = 0
 	m.applyDue(m.sched.Advance(0))

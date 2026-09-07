@@ -26,6 +26,7 @@ var (
 	playBar      = lipgloss.NewStyle().Foreground(playAccentFg).Background(playLineBg).Bold(true)
 
 	treeActive = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("4")).Bold(true)
+	treePlayed = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	kindAdd    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	kindMod    = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	kindDel    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)

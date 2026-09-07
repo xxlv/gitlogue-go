@@ -62,7 +62,7 @@ func (m Model) renderTree(width, height int) string {
 
 	focusIdx := 2
 	for _, r := range rows {
-		line := formatTreeRow(r, playhead, selected, width)
+		line := formatTreeRow(r, playhead, selected, m.filePlayed(r.Path), width)
 		if !r.IsDir && r.Path == selected {
 			focusIdx = len(lines)
 		}
@@ -74,15 +74,12 @@ func (m Model) renderTree(width, height int) string {
 	return clip(body, width, height)
 }
 
-func formatTreeRow(r treeRow, playhead, selected string, width int) string {
+func formatTreeRow(r treeRow, playhead, selected string, played bool, width int) string {
 	indent := strings.Repeat("  ", r.Depth)
 	if r.IsDir {
 		return dirStyle.MaxWidth(width).Render(truncate(indent+r.Display+"/", width))
 	}
-	cursor := " "
-	if r.Path == playhead {
-		cursor = "▸"
-	}
+	cursor := treeCursor(r.Path == playhead, played)
 	stats := ""
 	if r.Ins != 0 || r.Del != 0 {
 		stats = "  +" + strconv.Itoa(r.Ins) + "/-" + strconv.Itoa(r.Del)
@@ -91,12 +88,31 @@ func formatTreeRow(r treeRow, playhead, selected string, width int) string {
 	if r.Path == selected {
 		return treeActive.MaxWidth(width).Render(truncate(raw, width))
 	}
-	prefix := indent + cursor + " "
-	colored := styleKind(r.Kind).Render(kindMark(r.Kind)) + " " + r.Display
+	mark := cursor
+	if played {
+		mark = treePlayed.Render(cursor)
+	}
+	prefix := indent + mark + " "
+	name := r.Display
+	if played {
+		name = dimStyle.Render(r.Display)
+	}
+	colored := styleKind(r.Kind).Render(kindMark(r.Kind)) + " " + name
 	if stats != "" {
 		colored += kindAdd.Render("  +"+strconv.Itoa(r.Ins)) + kindDel.Render("/-"+strconv.Itoa(r.Del))
 	}
 	return truncate(prefix+colored, width)
+}
+
+func treeCursor(onPlayhead, played bool) string {
+	switch {
+	case onPlayhead && !played:
+		return "▸"
+	case played:
+		return "✓"
+	default:
+		return " "
+	}
 }
 
 func clip(content string, w, h int) string {
@@ -119,6 +135,28 @@ func window(center, total, height int) (start, end int) {
 		start = end - height
 	}
 	return start, end
+}
+
+func editorBodyH(paneH int) int {
+	h := paneH - 2 // path header + rule
+	if h < 1 {
+		return 1
+	}
+	return h
+}
+
+func scrollWindow(off, total, height int) (start, end int) {
+	if total <= height {
+		return 0, total
+	}
+	if off < 0 {
+		off = 0
+	}
+	maxOff := total - height
+	if off > maxOff {
+		off = maxOff
+	}
+	return off, off + height
 }
 
 // hOrigin is the first visible rune so the caret cell stays in the code pane.

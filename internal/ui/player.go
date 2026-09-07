@@ -46,6 +46,17 @@ type Model struct {
 	height int
 	last   time.Time
 	frames uint64
+
+	// editOff is the first visible 0-based line of the editor body. Playback
+	// keeps it locked to the caret; once paused or finished the user can
+	// scroll (mouse wheel, PgUp/PgDn, Home/End) so a long file is not stuck
+	// on its last lines.
+	editOff int
+
+	// played are files in the current commit whose replay has finished
+	// (playhead moved on, or the scheduler is Done). The tree marks them
+	// with ✓ so you can see what has already typed itself.
+	played map[string]struct{}
 }
 
 // NewPlayer constructs a dual-pane player for a single compiled script.
@@ -85,9 +96,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.last = msg.Time
+		wasPlaying := m.sched != nil && m.sched.Playing()
 		m.tickPlayback(dt)
+		if wasPlaying {
+			m.syncEditOff()
+		}
 		m.frames++
 		return m, scheduler.Tick(m.fps)
+
+	case tea.MouseMsg:
+		m.onMouse(msg)
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -107,6 +125,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveTree(1)
 		case "p", "shift+tab", "up":
 			m.moveTree(-1)
+		case "pgup":
+			m.scrollEditor(-m.editorPage())
+		case "pgdown":
+			m.scrollEditor(m.editorPage())
+		case "home":
+			m.scrollEditorTo(0)
+		case "end":
+			m.scrollEditorTo(m.editorMaxOff())
 		case "]":
 			m.nextTrack()
 		case "[":
@@ -137,7 +163,7 @@ func (m Model) View() string {
 	b.WriteByte('\n')
 	b.WriteString(body)
 	b.WriteByte('\n')
-	b.WriteString(helpStyle.Render("[Space] pause/resume | [Enter] replay file | [j/k] speed | [Tab/↑↓] files | [n/p] next file | [r] restart | [q] quit"))
+	b.WriteString(helpStyle.Render("[Space] pause/resume | [Enter] replay file | [j/k] speed | [Tab/↑↓] files | [PgUp/PgDn] scroll | [n/p] next file | [r] restart | [q] quit"))
 	return b.String()
 }
 
@@ -279,7 +305,7 @@ func (m Model) renderEditor(width, height int) string {
 	if !onPlayhead {
 		row, col = -1, -1
 	}
-	from, to := window(max(row-1, 0), n, bodyH) // 0-based [from, to)
+	from, to := m.editorRange(n, bodyH, row, onPlayhead) // 0-based [from, to)
 
 	numW := len(strconv.Itoa(n))
 	if numW < 3 {
@@ -377,4 +403,88 @@ func blinkOn(frames uint64, fps int) bool {
 		period = 1
 	}
 	return (frames/period)%2 == 0
+}
+
+const editorWheelDelta = 3
+
+func (m Model) followCaret(onPlayhead bool) bool {
+	return onPlayhead && !m.browsing && m.sched != nil && m.sched.Playing()
+}
+
+func (m Model) editorRange(n, bodyH, row int, onPlayhead bool) (from, to int) {
+	if m.followCaret(onPlayhead) {
+		return window(max(row-1, 0), n, bodyH)
+	}
+	return scrollWindow(m.editOff, n, bodyH)
+}
+
+func (m *Model) syncEditOff() {
+	buf := m.editorBuffer()
+	if buf == nil {
+		m.editOff = 0
+		return
+	}
+	_, _, paneH := m.layout()
+	bodyH := editorBodyH(paneH)
+	row, _ := buf.Caret()
+	from, _ := window(max(row-1, 0), buf.LineCount(), bodyH)
+	m.editOff = from
+}
+
+func (m Model) editorPage() int {
+	_, _, paneH := m.layout()
+	h := editorBodyH(paneH)
+	if h > 1 {
+		return h - 1
+	}
+	return 1
+}
+
+func (m Model) editorMaxOff() int {
+	buf := m.editorBuffer()
+	if buf == nil {
+		return 0
+	}
+	_, _, paneH := m.layout()
+	off := buf.LineCount() - editorBodyH(paneH)
+	if off < 0 {
+		return 0
+	}
+	return off
+}
+
+func (m *Model) pauseForScroll() {
+	if m.sched != nil && m.sched.Playing() {
+		m.sched.Pause()
+		m.syncEditOff()
+	}
+}
+
+func (m *Model) scrollEditor(delta int) {
+	m.pauseForScroll()
+	m.scrollEditorTo(m.editOff + delta)
+}
+
+func (m *Model) scrollEditorTo(off int) {
+	m.pauseForScroll()
+	if off < 0 {
+		off = 0
+	}
+	if maxOff := m.editorMaxOff(); off > maxOff {
+		off = maxOff
+	}
+	m.editOff = off
+}
+
+func (m *Model) onMouse(msg tea.MouseMsg) {
+	treeW, _, _ := m.layout()
+	if msg.X < treeW {
+		return
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.scrollEditor(-editorWheelDelta)
+	case tea.MouseButtonWheelDown:
+		m.scrollEditor(editorWheelDelta)
+	}
 }
