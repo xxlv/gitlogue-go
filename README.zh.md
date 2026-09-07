@@ -36,7 +36,7 @@ gitlogue --inspect --script --seed 1
 - `--repo` 向上查找 `.git`
 - `--commits N` 限制条数（单 revision 默认 1；`A..B` 默认整段）
 - `--file` 按路径、basename 或 glob 过滤
-- `--speed` 初始倍速（任意 `> 0`）；播放中用 `j` / `k` 减半 / 加倍，没有上限
+- `--speed` 初始倍速（任意 `> 0`）；播放中用 `j` / `-` / `←` 减半，`k` / `+` / `→` 加倍，没有上限
 - `--theme` 语法高亮（默认 `dracula`）
 
 ## 快捷键
@@ -45,8 +45,8 @@ gitlogue --inspect --script --seed 1
 |---|---|
 | `Space` | 暂停 / 继续。若已切到**另一个文件**，改为从该文件开头重放 |
 | `Enter` | 重放当前选中（或 playhead）文件 |
-| `j` / `←` | 速度减半 |
-| `k` / `→` | 速度加倍 |
+| `j` / `-` / `←` | 速度减半 |
+| `k` / `+` / `→` | 速度加倍 |
 | `Tab` / `↑` / `↓` | 在文件树里切换关注的文件（会暂停） |
 | `n` / `p` | 下一个 / 上一个修改文件 |
 | `]` / `[` | 下一个 / 上一个 commit |
@@ -54,17 +54,3 @@ gitlogue --inspect --script --seed 1
 | `q` / `Ctrl+C` | 退出 |
 
 回放时状态栏下一行是 **attribution strip**：commit 标题，以及作者 / 提交人 / 合作者 / 评审 / Generated-by 等。身份名或邮箱像 Copilot、Cursor 时会标 `[agent]`，方便人审 AI 写的 diff。Git trailer 支持 `Co-authored-by`、`Reviewed-by`、`Signed-off-by`、`Generated-by`、`Assisted-by` 等。`--inspect` 会把同一份 Credits 打进 dump。
-
-## 录制演示（VHS）
-
-上方 GIF 由 [`docs/demo.tape`](docs/demo.tape) 经 [VHS](https://github.com/charmbracelet/vhs) 生成。
-
-```bash
-# 回放 HEAD（或仓库当前指向的提交）
-./scripts/record.sh
-
-# 有具体 hash 后再填入
-./scripts/record.sh 7a8b9c0
-```
-
-`scripts/record.sh` 会编译 `gitlogue`，替换 tape 里的 `__COMMIT__`，并写出 `docs/demo.gif`（以及 `docs/demo.mp4`）。

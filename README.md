@@ -36,7 +36,7 @@ gitlogue --inspect --script --seed 1
 - `--repo` walks up to `.git`
 - `--commits N` caps how many commits to play (single revision defaults to 1; `A..B` defaults to the whole range)
 - `--file` filters by path, basename, or glob
-- `--speed` initial multiplier (any value `> 0`); during playback `j` / `k` halve / double with no cap
+- `--speed` initial multiplier (any value `> 0`); during playback `j` / `-` / `←` halve, `k` / `+` / `→` double, with no cap
 - `--theme` syntax highlighting (default `dracula`)
 
 ## Keys
@@ -45,8 +45,8 @@ gitlogue --inspect --script --seed 1
 |---|---|
 | `Space` | Pause / resume. If focus is on **another file**, replay that file from the start |
 | `Enter` | Replay the focused (or playhead) file |
-| `j` / `←` | Half speed |
-| `k` / `→` | Double speed |
+| `j` / `-` / `←` | Half speed |
+| `k` / `+` / `→` | Double speed |
 | `Tab` / `↑` / `↓` | Move focus in the file tree (pauses) |
 | `n` / `p` | Next / previous changed file |
 | `]` / `[` | Next / previous commit |
@@ -54,17 +54,3 @@ gitlogue --inspect --script --seed 1
 | `q` / `Ctrl+C` | Quit |
 
 Below the status bar is an **attribution strip**: the commit subject, then author / committer / co-authors / reviewers / Generated-by, and so on. Identities whose name or email looks like Copilot or Cursor are tagged `[agent]`, so a human can spot AI-written diffs. Trailers include `Co-authored-by`, `Reviewed-by`, `Signed-off-by`, `Generated-by`, and `Assisted-by`. `--inspect` dumps the same credits.
-
-## Record a demo (VHS)
-
-The GIF above is produced from [`docs/demo.tape`](docs/demo.tape) with [VHS](https://github.com/charmbracelet/vhs).
-
-```bash
-# Replay HEAD (or whatever the repo currently points at)
-./scripts/record.sh
-
-# Plug in a specific hash when you have one
-./scripts/record.sh 7a8b9c0
-```
-
-`scripts/record.sh` builds `gitlogue`, substitutes `__COMMIT__` in the tape, and writes `docs/demo.gif` (and `docs/demo.mp4`).
