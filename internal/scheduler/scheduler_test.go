@@ -171,6 +171,40 @@ func TestRunEmptyReturnsImmediately(t *testing.T) {
 	}
 }
 
+func TestDrainFiresRemaining(t *testing.T) {
+	t.Parallel()
+	s := New(script(
+		act(10*time.Millisecond),
+		act(10*time.Millisecond),
+		act(10*time.Millisecond),
+	), Options{MaxStep: time.Millisecond})
+	if n := len(s.Advance(0)); n != 1 {
+		t.Fatalf("first fire = %d, want 1", n)
+	}
+	got := s.Drain()
+	if len(got) != 2 {
+		t.Fatalf("Drain fired %d, want 2", len(got))
+	}
+	if !s.Done() || s.Playing() {
+		t.Fatalf("done=%v playing=%v", s.Done(), s.Playing())
+	}
+	if n := len(s.Drain()); n != 0 {
+		t.Fatalf("second Drain fired %d", n)
+	}
+}
+
+func TestPauseAndFinishStopsPlayback(t *testing.T) {
+	t.Parallel()
+	s := New(script(act(10*time.Millisecond), act(10*time.Millisecond)), Options{})
+	s.PauseAndFinish()
+	if !s.Done() || s.Playing() {
+		t.Fatalf("done=%v playing=%v", s.Done(), s.Playing())
+	}
+	if n := len(s.Advance(time.Second)); n != 0 {
+		t.Fatalf("Advance after PauseAndFinish fired %d", n)
+	}
+}
+
 func TestInterval(t *testing.T) {
 	t.Parallel()
 	if Interval(60) != time.Second/60 {

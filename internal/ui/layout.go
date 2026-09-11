@@ -52,26 +52,42 @@ func (m Model) renderTree(width, height int) string {
 		selected = playhead
 	}
 
-	var lines []string
-	lines = append(lines, headerStyle.Render("FILES"))
-	lines = append(lines, dimStyle.Render(strings.Repeat("─", max(1, width))))
-
-	if len(rows) == 0 {
-		lines = append(lines, dimStyle.Render("  (none)"))
+	cur, total := fileOrdinal(m.files, selected)
+	title := "FILES"
+	if total > 0 {
+		title = "FILES  " + strconv.Itoa(cur) + "/" + strconv.Itoa(total)
 	}
 
-	focusIdx := 2
-	for _, r := range rows {
-		line := formatTreeRow(r, playhead, selected, m.filePlayed(r.Path), width)
+	var body []string
+	focus := 0
+	for i, r := range rows {
+		body = append(body, formatTreeRow(r, playhead, selected, m.filePlayed(r.Path), width))
 		if !r.IsDir && r.Path == selected {
-			focusIdx = len(lines)
+			focus = i
 		}
-		lines = append(lines, line)
+	}
+	if len(body) == 0 {
+		body = append(body, dimStyle.Render("  (none)"))
 	}
 
-	start, end := window(focusIdx, len(lines), height)
-	body := strings.Join(lines[start:end], "\n")
-	return clip(body, width, height)
+	head := []string{
+		headerStyle.Render(truncate(title, width)),
+		dimStyle.Render(strings.Repeat("─", max(1, width))),
+	}
+	innerH := height - len(head)
+	if innerH < 1 {
+		innerH = 1
+	}
+
+	start, end := window(focus, len(body), innerH)
+	if start > 0 && innerH > 1 {
+		innerH--
+		start, end = window(focus, len(body), innerH)
+		head = append(head, dimStyle.Render(truncate("↑ "+strconv.Itoa(start)+" more", width)))
+	}
+
+	lines := append(head, body[start:end]...)
+	return clip(strings.Join(lines, "\n"), width, height)
 }
 
 func formatTreeRow(r treeRow, playhead, selected string, played bool, width int) string {

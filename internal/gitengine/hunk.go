@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/format/diff"
+	godiff "github.com/go-git/go-git/v5/utils/diff"
+	dmp "github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // Number of unchanged lines kept on each side of a change island.
@@ -22,6 +24,38 @@ func hunksFromFilePatch(fp diff.FilePatch) []Hunk {
 	lines := flattenChunks(fp.Chunks())
 	return groupHunks(lines, hunkContext)
 }
+
+// hunksFromTexts builds unified-diff hunks from two blob texts, the same
+// way go-git turns a tree change into a FilePatch (Myers line diff).
+func hunksFromTexts(oldContent, newContent string) []Hunk {
+	if oldContent == newContent {
+		return nil
+	}
+	var chunks []diff.Chunk
+	for _, d := range godiff.Do(oldContent, newContent) {
+		var op diff.Operation
+		switch d.Type {
+		case dmp.DiffEqual:
+			op = diff.Equal
+		case dmp.DiffDelete:
+			op = diff.Delete
+		case dmp.DiffInsert:
+			op = diff.Add
+		default:
+			continue
+		}
+		chunks = append(chunks, textChunk{content: d.Text, op: op})
+	}
+	return groupHunks(flattenChunks(chunks), hunkContext)
+}
+
+type textChunk struct {
+	content string
+	op      diff.Operation
+}
+
+func (c textChunk) Content() string      { return c.content }
+func (c textChunk) Type() diff.Operation { return c.op }
 
 func flattenChunks(chunks []diff.Chunk) []rawLine {
 	oldNo, newNo := 1, 1

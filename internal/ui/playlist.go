@@ -112,6 +112,12 @@ func (m *Model) tickPlayback(dt time.Duration) {
 	if m.sched == nil {
 		return
 	}
+	// j/k file browsing and parked-commit inspection must not resume the
+	// playlist. install() clears browsing when jumping commits, so inspecting
+	// is the flag that survives that reset.
+	if m.browsing || m.inspecting {
+		return
+	}
 	if m.between {
 		m.gapLeft -= dt
 		if m.gapLeft > 0 {
@@ -140,23 +146,56 @@ func (m *Model) tickPlayback(dt time.Duration) {
 }
 
 func (m *Model) nextTrack() {
-	if m.idx+1 >= len(m.tracks) {
-		return
-	}
-	m.install(m.idx + 1)
-	m.applyDue(m.sched.Advance(0))
+	m.openTrackAt(m.idx+1, 0)
 }
 
 func (m *Model) prevTrack() {
-	if m.idx <= 0 {
+	m.openTrackAt(m.idx-1, 0)
+}
+
+func (m *Model) parkInspect() {
+	if m.sched != nil {
+		m.applyDue(m.sched.Drain())
+		m.sched.PauseAndFinish()
+	}
+	m.inspecting = true
+	m.browsing = true
+	m.fileReplay = false
+	m.between = false
+	m.gapLeft = 0
+	for _, p := range filePaths(m.files) {
+		m.markPlayed(p)
+	}
+}
+
+func (m *Model) openTrackAt(i, fileIdx int) {
+	if i < 0 || i >= len(m.tracks) {
 		return
 	}
-	m.install(m.idx - 1)
-	m.applyDue(m.sched.Advance(0))
+	m.inspecting = true
+	m.install(i)
+	m.parkInspect()
+	paths := filePaths(m.files)
+	if len(paths) == 0 {
+		return
+	}
+	if fileIdx < 0 {
+		fileIdx = len(paths) + fileIdx
+	}
+	if fileIdx < 0 {
+		fileIdx = 0
+	}
+	if fileIdx >= len(paths) {
+		fileIdx = len(paths) - 1
+	}
+	m.selected = paths[fileIdx]
+	m.editOff = 0
 }
 
 func (m *Model) restart() {
 	m.fileReplay = false
+	m.inspecting = false
+	m.browsing = false
 	if len(m.tracks) == 0 {
 		if m.sched != nil {
 			m.sched.Reset()
@@ -175,8 +214,16 @@ func (m *Model) restart() {
 }
 
 func (m *Model) moveTree(delta int) {
+	m.between = false
+	m.gapLeft = 0
+	m.inspecting = true
 	paths := filePaths(m.files)
 	if len(paths) == 0 {
+		if delta < 0 {
+			m.openTrackAt(m.idx-1, -1)
+		} else {
+			m.openTrackAt(m.idx+1, 0)
+		}
 		return
 	}
 	if m.sched != nil && m.sched.Playing() {
@@ -201,10 +248,12 @@ func (m *Model) moveTree(delta int) {
 	}
 	idx += delta
 	if idx < 0 {
-		idx = 0
+		m.openTrackAt(m.idx-1, -1)
+		return
 	}
 	if idx >= len(paths) {
-		idx = len(paths) - 1
+		m.openTrackAt(m.idx+1, 0)
+		return
 	}
 	if paths[idx] != m.selected {
 		m.editOff = 0
@@ -273,6 +322,7 @@ func (m *Model) replayFile(path string) {
 	}
 	m.sched = scheduler.New(src.ForFile(path), opts)
 	m.browsing = false
+	m.inspecting = false
 	m.selected = path
 	m.fileReplay = true
 	m.editOff = 0
@@ -286,6 +336,7 @@ func (m *Model) replayFile(path string) {
 
 func (m *Model) stopBrowsing() {
 	m.browsing = false
+	m.inspecting = false
 	if buf := m.stage.Current(); buf != nil {
 		m.selected = buf.Path()
 	}

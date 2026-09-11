@@ -30,6 +30,18 @@ var (
 	kindAdd    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	kindMod    = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	kindDel    = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+
+	// Review overlay (after a file has typed itself): GitHub-like gutter
+	// plus a faint row wash. Colour is backup; the glyph is the signal.
+	addRowBg   = lipgloss.Color("22")
+	delRowBg   = lipgloss.Color("52")
+	modRowBg   = lipgloss.Color("58")
+	addRow     = lipgloss.NewStyle().Background(addRowBg)
+	delRow     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Faint(true).Background(delRowBg).Strikethrough(true)
+	modRow     = lipgloss.NewStyle().Background(modRowBg)
+	gutAdd     = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
+	gutDel     = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	gutMod     = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
 	kindRen    = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 	dirStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	agentTag   = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)

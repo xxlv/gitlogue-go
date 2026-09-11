@@ -2,6 +2,7 @@
 //
 // Default: play the last commit of the current repo as a 60 FPS TUI.
 // Pass a hash, ref, or A..B range as the first argument.
+// --wip replays uncommitted worktree changes against HEAD.
 package main
 
 import (
@@ -32,6 +33,7 @@ func run(args []string) error {
 	repo := fs.String("repo", ".", "path to a Git repository (walks up to .git)")
 	commit := fs.String("commit", "HEAD", "revision if no positional argument is given")
 	commits := fs.Int("commits", -1, "max commits (-1 = 1 for a single rev, all for A..B)")
+	wip := fs.Bool("wip", false, "replay uncommitted changes against HEAD (like git diff HEAD)")
 	file := fs.String("file", "", "only replay paths matching this name, basename, or glob")
 	inspect := fs.Bool("inspect", false, "dump the commit patch instead of playing")
 	script := fs.Bool("script", false, "dump the compiled Action stream instead of playing")
@@ -65,12 +67,33 @@ func run(args []string) error {
 		return err
 	}
 
-	diffs, err := engine.RevSpec(spec, n)
-	if err != nil {
-		return err
+	var diffs []*gitengine.CommitDiff
+	if *wip {
+		if dots != 0 {
+			return fmt.Errorf("--wip does not accept a revision range (%s)", spec)
+		}
+		d, err := engine.WorkingTree(spec)
+		if err != nil {
+			return err
+		}
+		if len(d.Files) == 0 {
+			return fmt.Errorf("no uncommitted changes against %s", spec)
+		}
+		diffs = []*gitengine.CommitDiff{d}
+	} else {
+		diffs, err = engine.RevSpec(spec, n)
+		if err != nil {
+			return err
+		}
 	}
 	diffs = gitengine.FilterDiffs(diffs, *file)
 	if len(diffs) == 0 {
+		if *wip {
+			if *file != "" {
+				return fmt.Errorf("no uncommitted files match %q", *file)
+			}
+			return fmt.Errorf("no uncommitted changes against %s", spec)
+		}
 		if *file != "" {
 			return fmt.Errorf("no commits touch %q in %s", *file, spec)
 		}

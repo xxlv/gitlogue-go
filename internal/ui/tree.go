@@ -89,6 +89,22 @@ func treeRows(files []gitengine.FileChange) []treeRow {
 	return out
 }
 
+func fileOrdinal(files []gitengine.FileChange, selected string) (cur, total int) {
+	for _, r := range treeRows(files) {
+		if r.IsDir {
+			continue
+		}
+		total++
+		if r.Path == selected {
+			cur = total
+		}
+	}
+	if total > 0 && cur == 0 {
+		cur = 1
+	}
+	return cur, total
+}
+
 func kindMark(k gitengine.ChangeKind) string {
 	switch k {
 	case gitengine.ChangeAdded:

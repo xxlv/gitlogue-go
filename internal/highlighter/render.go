@@ -61,6 +61,20 @@ func Emphasize(spans []Span, bg lipgloss.Color) []Span {
 	return out
 }
 
+// Tint paints a background onto spans without stealing syntax colours or
+// adding bold. Used by the post-playback add / delete / replace overlay.
+func Tint(spans []Span, bg lipgloss.Color) []Span {
+	if len(spans) == 0 {
+		return nil
+	}
+	out := make([]Span, len(spans))
+	for i, sp := range spans {
+		sp.Style = sp.Style.Background(bg)
+		out[i] = sp
+	}
+	return out
+}
+
 // Render concatenates spans with their lipgloss styles applied.
 func Render(spans []Span) string {
 	if len(spans) == 0 {

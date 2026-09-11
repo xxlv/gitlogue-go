@@ -109,6 +109,166 @@ func TestHunkHeaderPureInsertion(t *testing.T) {
 	}
 }
 
+func TestHunksFromTextsModify(t *testing.T) {
+	t.Parallel()
+	hunks := hunksFromTexts("package hello\n\nfunc Hi() {}\n", "package hello\n\nfunc Hi() {\n\tprintln(\"hi\")\n}\n")
+	if len(hunks) == 0 {
+		t.Fatal("expected hunks")
+	}
+	dump := ""
+	for _, h := range hunks {
+		dump += h.Header + "\n"
+		for _, l := range h.Lines {
+			dump += string(l.Kind.Prefix()) + l.Content + "\n"
+		}
+	}
+	if !strings.Contains(dump, "println") {
+		t.Fatalf("missing added line:\n%s", dump)
+	}
+}
+
+func TestWorkingTreeClean(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repo := initRepo(t, dir)
+	write(t, dir, "hello.go", "package hello\n")
+	head := commitAll(t, repo, "initial")
+
+	engine, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	diff, err := engine.WorkingTree("HEAD")
+	if err != nil {
+		t.Fatalf("WorkingTree: %v", err)
+	}
+	if diff.Commit.Hash != WorktreeHash {
+		t.Fatalf("hash = %q, want %s", diff.Commit.Hash, WorktreeHash)
+	}
+	if diff.Parent != head {
+		t.Fatalf("parent = %s, want %s", diff.Parent, head)
+	}
+	if len(diff.Files) != 0 {
+		t.Fatalf("clean worktree files = %d\n%s", len(diff.Files), diff.Format())
+	}
+}
+
+func TestWorkingTreeModifiedIgnoresUntracked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repo := initRepo(t, dir)
+	write(t, dir, "hello.go", "package hello\n\nfunc Hi() {}\n")
+	head := commitAll(t, repo, "initial")
+
+	write(t, dir, "hello.go", "package hello\n\nfunc Hi() {\n\tprintln(\"hi\")\n}\n")
+	write(t, dir, "scratch.md", "# untracked\n")
+
+	engine, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	diff, err := engine.WorkingTree("")
+	if err != nil {
+		t.Fatalf("WorkingTree: %v", err)
+	}
+	if diff.Parent != head {
+		t.Fatalf("parent = %s, want %s", diff.Parent, head)
+	}
+	if len(diff.Files) != 1 {
+		t.Fatalf("files = %d, want 1 (untracked omitted)\n%s", len(diff.Files), diff.Format())
+	}
+	f := diff.Files[0]
+	if f.DisplayPath() != "hello.go" || f.Kind != ChangeModified {
+		t.Fatalf("got %s [%s]", f.DisplayPath(), f.Kind)
+	}
+	if !strings.Contains(f.NewContent, "println") {
+		t.Fatalf("new content missing edit: %q", f.NewContent)
+	}
+	if len(f.Hunks) == 0 {
+		t.Fatal("modified file produced no hunks")
+	}
+}
+
+func TestWorkingTreeStagedAddAndDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repo := initRepo(t, dir)
+	write(t, dir, "hello.go", "package hello\n")
+	write(t, dir, "gone.go", "package gone\n")
+	commitAll(t, repo, "initial")
+
+	write(t, dir, "new.go", "package new\n")
+	if err := os.Remove(filepath.Join(dir, "gone.go")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("new.go"); err != nil {
+		t.Fatalf("Add new.go: %v", err)
+	}
+
+	engine, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	diff, err := engine.WorkingTree("HEAD")
+	if err != nil {
+		t.Fatalf("WorkingTree: %v", err)
+	}
+
+	byPath := map[string]FileChange{}
+	for _, f := range diff.Files {
+		byPath[f.DisplayPath()] = f
+	}
+	added, ok := byPath["new.go"]
+	if !ok || added.Kind != ChangeAdded {
+		t.Fatalf("new.go missing or not added: %+v\n%s", added, diff.Format())
+	}
+	deleted, ok := byPath["gone.go"]
+	if !ok || deleted.Kind != ChangeDeleted {
+		t.Fatalf("gone.go missing or not deleted: %+v\n%s", deleted, diff.Format())
+	}
+	if _, ok := byPath["hello.go"]; ok {
+		t.Fatalf("hello.go should be unchanged:\n%s", diff.Format())
+	}
+}
+
+func TestWorkingTreeFoldsStagedAndUnstaged(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	repo := initRepo(t, dir)
+	write(t, dir, "hello.go", "one\n")
+	commitAll(t, repo, "initial")
+
+	write(t, dir, "hello.go", "two\n")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if _, err := wt.Add("hello.go"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	write(t, dir, "hello.go", "three\n")
+
+	engine, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	diff, err := engine.WorkingTree("HEAD")
+	if err != nil {
+		t.Fatalf("WorkingTree: %v", err)
+	}
+	if len(diff.Files) != 1 {
+		t.Fatalf("files = %d, want 1\n%s", len(diff.Files), diff.Format())
+	}
+	f := diff.Files[0]
+	if f.OldContent != "one\n" || f.NewContent != "three\n" {
+		t.Fatalf("folded contents old=%q new=%q, want one -> three", f.OldContent, f.NewContent)
+	}
+}
+
 func TestHistoryOldestFirst(t *testing.T) {
 	t.Parallel()
 

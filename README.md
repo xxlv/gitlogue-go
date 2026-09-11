@@ -23,6 +23,9 @@ gitlogue
 # A specific commit
 gitlogue 7a8b9c0
 
+# Replay uncommitted worktree changes vs HEAD (staged + unstaged)
+gitlogue --wip
+
 # First-parent walk from main to feature (oldest first)
 gitlogue main..feature
 
@@ -34,9 +37,10 @@ gitlogue --inspect --script --seed 1
 ```
 
 - `--repo` walks up to `.git`
+- `--wip` plays uncommitted changes against HEAD (`git diff HEAD`; untracked files are omitted)
 - `--commits N` caps how many commits to play (single revision defaults to 1; `A..B` defaults to the whole range)
 - `--file` filters by path, basename, or glob
-- `--speed` initial multiplier (any value `> 0`); during playback `j` / `-` / `←` halve, `k` / `+` / `→` double, with no cap
+- `--speed` initial multiplier (any value `> 0`); during playback `-` / `←` halve, `+` / `→` double, with no cap
 - `--theme` syntax highlighting (default `dracula`)
 
 ## Keys
@@ -45,13 +49,14 @@ gitlogue --inspect --script --seed 1
 |---|---|
 | `Space` | Pause / resume. If focus is on **another file**, replay that file from the start |
 | `Enter` | Replay the focused (or playhead) file |
-| `j` / `-` / `←` | Half speed |
-| `k` / `+` / `→` | Double speed |
-| `Tab` / `↑` / `↓` | Move focus in the file tree (pauses) |
-| `PgUp` / `PgDn` | Scroll the editor. Mouse wheel over the file pane does the same |
+| `j` / `↓` / `n` / `Tab` | Next file. Past the last file of this commit, open the next commit |
+| `k` / `↑` / `p` | Previous file. From the first file, jump to the last file of the previous commit |
+| `-` / `←` | Half speed |
+| `+` / `→` | Double speed |
+| `PgUp` / `PgDn` | Scroll the editor. Mouse wheel over the file pane does the same; over the tree it switches files |
 | `Home` / `End` | Jump to the top / bottom of the open file |
-| `n` / `p` | Next / previous changed file |
-| `]` / `[` | Next / previous commit |
+| `]` / `[` | Next / previous commit (park on the result, do not autoplay; `Space` / `r` to play) |
+| `v` | Toggle review overlay / committed file (after playback) |
 | `r` | Restart the current commit (whole track, not one file) |
 | `q` / `Ctrl+C` | Quit |
 

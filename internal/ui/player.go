@@ -57,6 +57,15 @@ type Model struct {
 	// (playhead moved on, or the scheduler is Done). The tree marks them
 	// with ✓ so you can see what has already typed itself.
 	played map[string]struct{}
+
+	// finalView hides the post-playback review overlay and shows the
+	// committed file instead. Toggle with v; playback itself is unchanged.
+	finalView bool
+
+	// inspecting is set when the user steps to another commit with j/k/[ /].
+	// install() clears browsing, so this flag must survive that reset or the
+	// next frame would treat the parked commit as Done and auto-play the next.
+	inspecting bool
 }
 
 // NewPlayer constructs a dual-pane player for a single compiled script.
@@ -115,16 +124,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.onSpace()
 		case "enter":
 			m.onEnter()
-		case "j", "left", "-", "_":
+		case "j", "n", "tab", "down":
+			m.moveTree(1)
+		case "k", "p", "shift+tab", "up":
+			m.moveTree(-1)
+		case "left", "-", "_":
 			m.nudgeSpeed(-1)
-		case "k", "right", "+", "=":
+		case "right", "+", "=":
 			m.nudgeSpeed(1)
+		case "v":
+			m.toggleFinalView()
 		case "r":
 			m.restart()
-		case "n", "tab", "down":
-			m.moveTree(1)
-		case "p", "shift+tab", "up":
-			m.moveTree(-1)
 		case "pgup":
 			m.scrollEditor(-m.editorPage())
 		case "pgdown":
@@ -163,7 +174,7 @@ func (m Model) View() string {
 	b.WriteByte('\n')
 	b.WriteString(body)
 	b.WriteByte('\n')
-	b.WriteString(helpStyle.Render("[Space] pause/resume | [Enter] replay file | [j/k] speed | [Tab/↑↓] files | [PgUp/PgDn] scroll | [n/p] next file | [r] restart | [q] quit"))
+	b.WriteString(helpStyle.Render("[Space] pause/resume | [Enter] replay file | [j/k/↑↓] files | [+/-] speed | [PgUp/PgDn] scroll | [v] overlay | [r] restart | [q] quit"))
 	return b.String()
 }
 
@@ -274,14 +285,22 @@ func (m Model) renderProgress() string {
 		barEmpty.Render(strings.Repeat("░", width-filled))
 }
 
+const reviewGutterW = 2
+
 func (m Model) renderEditor(width, height int) string {
 	if width < 1 || height < 1 {
 		return ""
 	}
 	buf := m.editorBuffer()
+	review, inReview := m.reviewDoc()
 	header := "(no file open)"
 	if buf != nil && buf.Path() != "" {
 		header = buf.Path()
+	}
+	if inReview && m.finalView {
+		header = finalHeader(header, width)
+	} else if inReview {
+		header = reviewHeader(header, review, width)
 	}
 
 	var lines []string
@@ -293,62 +312,196 @@ func (m Model) renderEditor(width, height int) string {
 		bodyH = 1
 	}
 
-	if buf == nil || buf.LineCount() == 0 {
-		lines = append(lines, dimStyle.Render("  waiting for first keystroke"))
+	n := 0
+	if inReview {
+		n = len(review)
+	} else if buf != nil {
+		n = buf.LineCount()
+	}
+	if n == 0 {
+		msg := "  waiting for first keystroke"
+		if inReview || m.showingFinal() {
+			msg = "  (empty file)"
+		}
+		lines = append(lines, dimStyle.Render(msg))
 		return clip(strings.Join(lines, "\n"), width, height)
 	}
 
-	n := buf.LineCount()
-	row, col := buf.Caret()
+	caretRow, caretCol := -1, -1
 	playhead := m.playheadPath()
-	onPlayhead := buf.Path() == playhead
-	if !onPlayhead {
-		row, col = -1, -1
+	onPlayhead := buf != nil && buf.Path() == playhead
+	if buf != nil && onPlayhead {
+		caretRow, caretCol = buf.Caret()
 	}
-	from, to := m.editorRange(n, bodyH, row, onPlayhead) // 0-based [from, to)
+	row := caretRow
+	if inReview {
+		row = reviewIndex(review, caretRow) + 1
+	}
+	from, to := m.editorRange(n, bodyH, row, onPlayhead && !inReview)
 
 	numW := len(strconv.Itoa(n))
+	if inReview {
+		if w := reviewNumWidth(review); w > numW {
+			numW = w
+		}
+	}
 	if numW < 3 {
 		numW = 3
 	}
 	nums := numStyle.Width(numW)
-	blink := onPlayhead && blinkOn(m.frames, m.fps)
-	src := buf.String()
+	blink := onPlayhead && !inReview && blinkOn(m.frames, m.fps)
+	src := ""
+	if buf != nil {
+		src = buf.String()
+	}
+	if inReview {
+		if ns := reviewNewSource(m.lookupSelected()); ns != "" {
+			src = ns
+		}
+	}
 	pool := m.hl
 	if pool == nil {
 		pool = highlighter.NewPool("")
 	}
-	styled := pool.For(buf.Path()).Lines(src)
-	codeW := width - numW - 3
+	path := ""
+	if buf != nil {
+		path = buf.Path()
+	}
+	styled := pool.For(path).Lines(src)
+	codeW := width - numW - 3 - reviewGutterW
 	if codeW < 8 {
 		codeW = 8
 	}
 	origin := 0
-	if onPlayhead && col >= 0 {
-		origin = hOrigin(col, codeW)
+	if onPlayhead && caretCol >= 0 {
+		origin = hOrigin(caretCol, codeW)
 	}
 
 	for i := from + 1; i <= to; i++ {
+		if inReview {
+			rr := review[i-1]
+			active := onPlayhead && i == row
+			lineOrigin := 0
+			if active {
+				lineOrigin = origin
+			}
+			line := m.renderReviewLine(styled, rr, codeW, lineOrigin)
+			lines = append(lines, formatEditorRow(rr.Number, numW, codeW, width, nums, line, active, rr.Mark))
+			continue
+		}
 		plain := buf.Line(i)
 		active := onPlayhead && i == row
-		line := m.renderLine(styled, i, plain, row, col, origin, codeW, blink, active)
-		lines = append(lines, formatEditorRow(i, numW, codeW, width, nums, line, active))
+		line := m.renderLine(styled, i, plain, row, caretCol, origin, codeW, blink, active, reviewContext)
+		lines = append(lines, formatEditorRow(i, numW, codeW, width, nums, line, active, reviewContext))
 	}
 	return clip(strings.Join(lines, "\n"), width, height)
 }
 
-func formatEditorRow(i, numW, codeW, width int, nums lipgloss.Style, code string, active bool) string {
-	n := strconv.Itoa(i)
-	code = lipgloss.NewStyle().MaxWidth(codeW).MaxHeight(1).Render(code)
-	if !active {
-		row := nums.Render(n) + " │ " + code
-		return lipgloss.NewStyle().MaxWidth(width).MaxHeight(1).Render(row)
+func reviewHeader(path string, rows []reviewRow, width int) string {
+	add, mod, del := reviewStats(rows)
+	var bits []string
+	if add > 0 {
+		bits = append(bits, kindAdd.Render("+"+strconv.Itoa(add)))
 	}
-	row := playNum.Width(numW).Render(n) + playBar.Render(" ▌ ") + playRow.Width(codeW).MaxHeight(1).Render(code)
+	if mod > 0 {
+		bits = append(bits, kindMod.Render("~"+strconv.Itoa(mod)))
+	}
+	if del > 0 {
+		bits = append(bits, kindDel.Render("-"+strconv.Itoa(del)))
+	}
+	if len(bits) == 0 {
+		return path
+	}
+	legend := strings.Join(bits, " ")
+	room := width - lipgloss.Width(legend) - 2
+	if room < 8 {
+		room = 8
+	}
+	return truncate(path, room) + "  " + legend
+}
+
+func finalHeader(path string, width int) string {
+	tag := dimStyle.Render("final")
+	room := width - lipgloss.Width(tag) - 2
+	if room < 8 {
+		room = 8
+	}
+	return truncate(path, room) + "  " + tag
+}
+
+func reviewNumWidth(rows []reviewRow) int {
+	maxN := 0
+	for _, r := range rows {
+		if r.Number > maxN {
+			maxN = r.Number
+		}
+	}
+	return len(strconv.Itoa(maxN))
+}
+
+func reviewNewSource(fc *gitengine.FileChange) string {
+	if fc == nil {
+		return ""
+	}
+	return fc.NewContent
+}
+
+func formatEditorRow(i, numW, codeW, width int, nums lipgloss.Style, code string, active bool, mark reviewMark) string {
+	n := ""
+	if i > 0 {
+		n = strconv.Itoa(i)
+	}
+	gutter, gut := reviewGutter(mark)
+	sep, sepSty := " │ ", dimStyle
+	numSty := nums.Width(numW)
+	cell := reviewCell(mark)
+	if active {
+		sep, sepSty = " ▌ ", playBar
+		numSty = playNum.Width(numW)
+		if mark == reviewContext {
+			cell = playRow
+		}
+	}
+	code = cell.Width(codeW).MaxWidth(codeW).MaxHeight(1).Render(code)
+	row := gut.Width(reviewGutterW).Render(gutter) + numSty.Render(n) + sepSty.Render(sep) + code
 	return lipgloss.NewStyle().MaxWidth(width).MaxHeight(1).Render(row)
 }
 
-func (m Model) renderLine(styled [][]highlighter.Span, row int, plain string, caretRow, caretCol, origin, codeW int, blink, active bool) string {
+func reviewGutter(mark reviewMark) (string, lipgloss.Style) {
+	g := mark.glyph() + " "
+	switch mark {
+	case reviewAdd:
+		return g, gutAdd
+	case reviewDel:
+		return g, gutDel
+	case reviewMod:
+		return g, gutMod
+	default:
+		return "  ", dimStyle
+	}
+}
+
+func reviewCell(mark reviewMark) lipgloss.Style {
+	switch mark {
+	case reviewAdd:
+		return addRow
+	case reviewDel:
+		return delRow
+	case reviewMod:
+		return modRow
+	default:
+		return lipgloss.NewStyle()
+	}
+}
+
+func (m Model) renderReviewLine(styled [][]highlighter.Span, rr reviewRow, codeW, origin int) string {
+	if rr.Mark == reviewDel {
+		return cropRunes(rr.Text, origin, codeW)
+	}
+	return m.renderLine(styled, rr.Number, rr.Text, -1, -1, origin, codeW, false, false, rr.Mark)
+}
+
+func (m Model) renderLine(styled [][]highlighter.Span, row int, plain string, caretRow, caretCol, origin, codeW int, blink, active bool, mark reviewMark) string {
 	var spans []highlighter.Span
 	if row >= 1 && row <= len(styled) {
 		spans = styled[row-1]
@@ -359,10 +512,14 @@ func (m Model) renderLine(styled [][]highlighter.Span, row int, plain string, ca
 	if rel < 0 {
 		rel = 0
 	}
+	bg, tinted := reviewBG(mark)
 	switch {
 	case useHL:
 		spans = highlighter.Slice(spans, origin, codeW)
-		if active {
+		switch {
+		case tinted:
+			spans = highlighter.Tint(spans, bg)
+		case active:
 			spans = highlighter.Emphasize(spans, playLineBg)
 		}
 		if onCaret {
@@ -373,6 +530,17 @@ func (m Model) renderLine(styled [][]highlighter.Span, row int, plain string, ca
 		return withCaret(cropRunes(plain, origin, codeW), rel, blink)
 	default:
 		return cropRunes(plain, origin, codeW)
+	}
+}
+
+func reviewBG(mark reviewMark) (lipgloss.Color, bool) {
+	switch mark {
+	case reviewAdd:
+		return addRowBg, true
+	case reviewMod:
+		return modRowBg, true
+	default:
+		return "", false
 	}
 }
 
@@ -419,16 +587,42 @@ func (m Model) editorRange(n, bodyH, row int, onPlayhead bool) (from, to int) {
 }
 
 func (m *Model) syncEditOff() {
-	buf := m.editorBuffer()
-	if buf == nil {
+	n := m.editorDisplayCount()
+	if n == 0 {
 		m.editOff = 0
 		return
 	}
 	_, _, paneH := m.layout()
 	bodyH := editorBodyH(paneH)
-	row, _ := buf.Caret()
-	from, _ := window(max(row-1, 0), buf.LineCount(), bodyH)
+	from, _ := window(m.editorCaretIndex(), n, bodyH)
 	m.editOff = from
+}
+
+func (m Model) editorDisplayCount() int {
+	if rows, ok := m.reviewDoc(); ok {
+		return len(rows)
+	}
+	buf := m.editorBuffer()
+	if buf == nil {
+		return 0
+	}
+	return buf.LineCount()
+}
+
+func (m Model) editorCaretIndex() int {
+	if rows, ok := m.reviewDoc(); ok {
+		row := 0
+		if buf := m.editorBuffer(); buf != nil {
+			row, _ = buf.Caret()
+		}
+		return reviewIndex(rows, row)
+	}
+	buf := m.editorBuffer()
+	if buf == nil {
+		return 0
+	}
+	row, _ := buf.Caret()
+	return max(row-1, 0)
 }
 
 func (m Model) editorPage() int {
@@ -441,12 +635,12 @@ func (m Model) editorPage() int {
 }
 
 func (m Model) editorMaxOff() int {
-	buf := m.editorBuffer()
-	if buf == nil {
+	n := m.editorDisplayCount()
+	if n == 0 {
 		return 0
 	}
 	_, _, paneH := m.layout()
-	off := buf.LineCount() - editorBodyH(paneH)
+	off := n - editorBodyH(paneH)
 	if off < 0 {
 		return 0
 	}
@@ -478,13 +672,18 @@ func (m *Model) scrollEditorTo(off int) {
 
 func (m *Model) onMouse(msg tea.MouseMsg) {
 	treeW, _, _ := m.layout()
-	if msg.X < treeW {
-		return
-	}
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
+		if msg.X < treeW {
+			m.moveTree(-1)
+			return
+		}
 		m.scrollEditor(-editorWheelDelta)
 	case tea.MouseButtonWheelDown:
+		if msg.X < treeW {
+			m.moveTree(1)
+			return
+		}
 		m.scrollEditor(editorWheelDelta)
 	}
 }

@@ -269,6 +269,9 @@ func TestPlaylistAdvancesOnDone(t *testing.T) {
 	if m.sched.Speed() != 2 {
 		t.Fatalf("speed=%v, want 2 preserved across tracks", m.sched.Speed())
 	}
+	if m.sched.Playing() {
+		t.Fatal("[ should park on the previous commit, not start playback")
+	}
 	view := m.View()
 	if !strings.Contains(view, "1/2") {
 		t.Fatalf("view missing playlist index:\n%s", view)
@@ -372,17 +375,133 @@ func TestSpaceOnPlayheadResumes(t *testing.T) {
 	}
 }
 
-func TestJSlowsPlayback(t *testing.T) {
+func TestMinusSlowsPlayback(t *testing.T) {
 	t.Parallel()
 	m := NewPlayer(animator.Script{
 		Actions: []animator.Action{
 			{Kind: animator.KindOpenFile, File: "a.go", Delay: time.Second},
 		},
 	}, nil, scheduler.Options{FPS: 60}, "")
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'-'}})
 	m = updated.(Model)
 	if m.sched.Speed() != 0.5 {
-		t.Fatalf("j speed=%v, want 0.5", m.sched.Speed())
+		t.Fatalf("- speed=%v, want 0.5", m.sched.Speed())
+	}
+}
+
+func TestJKMovesFiles(t *testing.T) {
+	t.Parallel()
+	script := animator.Script{
+		Commit: "abc1234",
+		Actions: []animator.Action{
+			{Kind: animator.KindOpenFile, File: "a.go", Delay: 100 * time.Millisecond},
+			{Kind: animator.KindTypeChar, File: "a.go", Row: 1, Col: 0, Rune: 'x', Delay: 100 * time.Millisecond},
+			{Kind: animator.KindOpenFile, File: "b.go", Delay: 100 * time.Millisecond},
+		},
+	}
+	diff := &gitengine.CommitDiff{
+		Files: []gitengine.FileChange{
+			{Path: "a.go", Kind: gitengine.ChangeAdded, OldContent: "old-a\n"},
+			{Path: "b.go", Kind: gitengine.ChangeAdded, OldContent: "old-b\n"},
+		},
+	}
+	m := NewPlayer(script, diff, scheduler.Options{FPS: 60, MaxStep: time.Second}, "")
+	m.width, m.height = 100, 24
+	now := time.Unix(0, 0).UTC()
+	updated, _ := m.Update(scheduler.FrameMsg{Time: now})
+	m = updated.(Model)
+	if m.selected != "a.go" {
+		t.Fatalf("selected=%q, want a.go", m.selected)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.selected != "b.go" {
+		t.Fatalf("j should move to next file, selected=%q", m.selected)
+	}
+	if m.sched.Playing() {
+		t.Fatal("j should pause playback")
+	}
+	if m.sched.Speed() != 1 {
+		t.Fatalf("j must not change speed, speed=%v", m.sched.Speed())
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.selected != "a.go" {
+		t.Fatalf("k should move to previous file, selected=%q", m.selected)
+	}
+}
+
+func TestKWalksPreviousCommit(t *testing.T) {
+	t.Parallel()
+	opts := scheduler.Options{FPS: 60, MaxStep: time.Second}
+	m := NewPlaylist([]Track{
+		{
+			Script: animator.Script{
+				Commit: "aaa1111",
+				Actions: []animator.Action{
+					{Kind: animator.KindOpenFile, File: "a.go", Delay: time.Millisecond},
+					{Kind: animator.KindTypeChar, File: "a.go", Row: 1, Col: 0, Rune: 'a', Delay: time.Millisecond},
+				},
+			},
+			Diff: &gitengine.CommitDiff{
+				Commit: gitengine.CommitInfo{ShortHash: "aaa1111"},
+				Files:  []gitengine.FileChange{{Path: "a.go", Kind: gitengine.ChangeAdded, OldContent: "old-a\n"}},
+			},
+		},
+		{
+			Script: animator.Script{
+				Commit: "bbb2222",
+				Actions: []animator.Action{
+					{Kind: animator.KindOpenFile, File: "b.go", Delay: time.Millisecond},
+					{Kind: animator.KindTypeChar, File: "b.go", Row: 1, Col: 0, Rune: 'b', Delay: time.Millisecond},
+				},
+			},
+			Diff: &gitengine.CommitDiff{
+				Commit: gitengine.CommitInfo{ShortHash: "bbb2222"},
+				Files:  []gitengine.FileChange{{Path: "b.go", Kind: gitengine.ChangeAdded, OldContent: "old-b\n"}},
+			},
+		},
+	}, opts, "")
+	m.width, m.height = 100, 24
+
+	now := time.Unix(0, 0).UTC()
+	updated, _ := m.Update(scheduler.FrameMsg{Time: now})
+	m = updated.(Model)
+	if m.idx != 1 || m.selected != "b.go" {
+		t.Fatalf("idx=%d selected=%q, want last commit's b.go", m.idx, m.selected)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.idx != 0 {
+		t.Fatalf("k at the first file of the last commit should open the previous commit, idx=%d", m.idx)
+	}
+	if m.selected != "a.go" {
+		t.Fatalf("selected=%q, want a.go", m.selected)
+	}
+	view := m.View()
+	if !strings.Contains(view, "a.go") {
+		t.Fatalf("should show the previous commit's file:\n%s", view)
+	}
+	if !strings.Contains(view, "1/2") {
+		t.Fatalf("status should show commit 1/2:\n%s", view)
+	}
+	if m.sched.Playing() {
+		t.Fatal("stepping back to a previous commit must not start playback")
+	}
+
+	updated, _ = m.Update(scheduler.FrameMsg{Time: now.Add(time.Second)})
+	m = updated.(Model)
+	if m.idx != 0 {
+		t.Fatalf("next frame auto-advanced to idx=%d, want to stay on the browsed commit", m.idx)
+	}
+	if m.sched.Playing() {
+		t.Fatal("browsing must not resume the playlist on the next frame")
+	}
+	if m.selected != "a.go" {
+		t.Fatalf("selected=%q after tick, want a.go", m.selected)
 	}
 }
 
@@ -510,5 +629,81 @@ func TestLongLineFollowsCaret(t *testing.T) {
 	}
 	if !strings.Contains(view, "▌") {
 		t.Fatalf("playhead row missing accent:\n%s", view)
+	}
+}
+
+func TestReviewMarksAfterPlayback(t *testing.T) {
+	t.Parallel()
+	fc := gitengine.FileChange{
+		Path:       "a.go",
+		Kind:       gitengine.ChangeModified,
+		OldContent: "keep\nold\n",
+		NewContent: "keep\nnew\nextra\n",
+		Hunks: []gitengine.Hunk{{
+			OldStart: 1, OldLines: 2, NewStart: 1, NewLines: 3,
+			Lines: []gitengine.DiffLine{
+				{Kind: gitengine.LineContext, OldNumber: 1, NewNumber: 1, Content: "keep"},
+				{Kind: gitengine.LineDeleted, OldNumber: 2, Content: "old"},
+				{Kind: gitengine.LineAdded, NewNumber: 2, Content: "new"},
+				{Kind: gitengine.LineAdded, NewNumber: 3, Content: "extra"},
+			},
+		}},
+	}
+	m := NewPlayer(animator.Script{
+		Commit: "abc1234",
+		Actions: []animator.Action{
+			{Kind: animator.KindOpenFile, File: "a.go", Delay: time.Millisecond},
+		},
+	}, &gitengine.CommitDiff{Files: []gitengine.FileChange{fc}}, scheduler.Options{FPS: 60, MaxStep: time.Second}, "")
+	m.width, m.height = 100, 24
+
+	now := time.Unix(0, 0).UTC()
+	updated, _ := m.Update(scheduler.FrameMsg{Time: now})
+	m = updated.(Model)
+	if !m.sched.Done() {
+		t.Fatal("expected playback to finish")
+	}
+	view := m.View()
+	for _, want := range []string{"keep", "old", "new", "extra"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("review missing %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "~") {
+		t.Fatalf("replaced line should carry a ~ gutter:\n%s", view)
+	}
+	if !strings.Contains(view, "+1") || !strings.Contains(view, "~1") || !strings.Contains(view, "-1") {
+		t.Fatalf("header should count +add ~edit -del:\n%s", view)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = updated.(Model)
+	if !m.finalView {
+		t.Fatal("v should toggle to the committed file")
+	}
+	view = m.View()
+	if !strings.Contains(view, "final") {
+		t.Fatalf("final view should tag the header:\n%s", view)
+	}
+	if strings.Contains(view, "old") {
+		t.Fatalf("final view must drop deleted ghosts:\n%s", view)
+	}
+	if strings.Contains(view, "~") {
+		t.Fatalf("final view should not mark replacements:\n%s", view)
+	}
+	for _, want := range []string{"keep", "new", "extra"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("final view missing %q:\n%s", want, view)
+		}
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = updated.(Model)
+	if m.finalView {
+		t.Fatal("v should toggle back to review")
+	}
+	view = m.View()
+	if !strings.Contains(view, "old") || !strings.Contains(view, "~") {
+		t.Fatalf("review overlay should return:\n%s", view)
 	}
 }

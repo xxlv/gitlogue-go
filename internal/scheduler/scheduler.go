@@ -157,6 +157,39 @@ func (s *Scheduler) Pause() {
 	s.playing = false
 }
 
+// Drain fires every remaining action, ignoring MaxStep and pause. The UI
+// uses this to land on a finished commit when browsing files backwards
+// through a playlist.
+func (s *Scheduler) Drain() []animator.Action {
+	if s == nil || s.done {
+		return nil
+	}
+	var fired []animator.Action
+	for s.index < len(s.script.Actions) {
+		a := s.script.Actions[s.index]
+		fired = append(fired, a)
+		s.nextDue += a.Delay
+		s.index++
+	}
+	s.elapsed = s.nextDue
+	s.done = true
+	s.playing = false
+	return fired
+}
+
+// PauseAndFinish marks the script complete without emitting actions.
+// Used when the UI parks on a commit for inspection instead of replaying it.
+func (s *Scheduler) PauseAndFinish() {
+	if s == nil {
+		return
+	}
+	s.index = len(s.script.Actions)
+	s.elapsed = s.script.Duration()
+	s.nextDue = s.elapsed
+	s.done = true
+	s.playing = false
+}
+
 // Toggle pauses a running script or resumes a paused one.
 func (s *Scheduler) Toggle() {
 	if s == nil || s.done {
@@ -167,7 +200,7 @@ func (s *Scheduler) Toggle() {
 
 // SetSpeed sets the playback multiplier. Non-positive, NaN, and Inf are
 // ignored so the playhead cannot freeze or explode; there is otherwise
-// no cap — the user may pass any --speed and keep tapping j/k.
+// no cap — the user may pass any --speed and keep tapping +/-.
 func (s *Scheduler) SetSpeed(speed float64) {
 	if s == nil || speed <= 0 || math.IsNaN(speed) || math.IsInf(speed, 0) {
 		return
