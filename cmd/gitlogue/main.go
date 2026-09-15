@@ -3,6 +3,7 @@
 // Default: play the last commit of the current repo as a 60 FPS TUI.
 // Pass a hash, ref, or A..B range as the first argument.
 // --wip replays uncommitted worktree changes against HEAD.
+// --listen (implies --wip) watches the worktree and auto-plays new edits.
 package main
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/xxlv/gitlogue-go/internal/highlighter"
 	"github.com/xxlv/gitlogue-go/internal/scheduler"
 	"github.com/xxlv/gitlogue-go/internal/ui"
+	"github.com/xxlv/gitlogue-go/internal/watch"
 )
 
 func main() {
@@ -34,6 +36,7 @@ func run(args []string) error {
 	commit := fs.String("commit", "HEAD", "revision if no positional argument is given")
 	commits := fs.Int("commits", -1, "max commits (-1 = 1 for a single rev, all for A..B)")
 	wip := fs.Bool("wip", false, "replay uncommitted changes against HEAD (like git diff HEAD)")
+	listen := fs.Bool("listen", false, "watch the worktree and auto-play new edits (implies --wip)")
 	file := fs.String("file", "", "only replay paths matching this name, basename, or glob")
 	inspect := fs.Bool("inspect", false, "dump the commit patch instead of playing")
 	script := fs.Bool("script", false, "dump the compiled Action stream instead of playing")
@@ -53,6 +56,12 @@ func run(args []string) error {
 	}
 
 	_, _, dots := gitengine.SplitRev(spec)
+	if *listen {
+		*wip = true
+	}
+	if *listen && (*inspect || *script) {
+		return fmt.Errorf("--listen cannot be combined with --inspect or --script")
+	}
 	n := *commits
 	if n < 0 {
 		if dots == 0 {
@@ -68,6 +77,7 @@ func run(args []string) error {
 	}
 
 	var diffs []*gitengine.CommitDiff
+	var listenSig string
 	if *wip {
 		if dots != 0 {
 			return fmt.Errorf("--wip does not accept a revision range (%s)", spec)
@@ -76,18 +86,28 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
+		d = gitengine.FilterDiff(d, *file)
+		listenSig = gitengine.SnapshotSig(d)
 		if len(d.Files) == 0 {
-			return fmt.Errorf("no uncommitted changes against %s", spec)
+			if !*listen {
+				if *file != "" {
+					return fmt.Errorf("no uncommitted files match %q", *file)
+				}
+				return fmt.Errorf("no uncommitted changes against %s", spec)
+			}
+		} else {
+			diffs = []*gitengine.CommitDiff{d}
 		}
-		diffs = []*gitengine.CommitDiff{d}
 	} else {
 		diffs, err = engine.RevSpec(spec, n)
 		if err != nil {
 			return err
 		}
 	}
-	diffs = gitengine.FilterDiffs(diffs, *file)
-	if len(diffs) == 0 {
+	if !*wip {
+		diffs = gitengine.FilterDiffs(diffs, *file)
+	}
+	if len(diffs) == 0 && !*listen {
 		if *wip {
 			if *file != "" {
 				return fmt.Errorf("no uncommitted files match %q", *file)
@@ -117,6 +137,15 @@ func run(args []string) error {
 		Speed: *speed,
 	}, *theme)
 	model.InterGap = ui.DefaultInterGap
+	model.Seed = *seed
+	if *listen {
+		against := spec
+		filter := *file
+		eng := engine
+		model.EnableListen(func(sig string) tea.Cmd {
+			return watch.Listen(eng, against, filter, sig)
+		}, listenSig)
+	}
 	_, err = tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
 }

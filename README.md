@@ -26,6 +26,10 @@ gitlogue 7a8b9c0
 # Replay uncommitted worktree changes vs HEAD (staged + unstaged)
 gitlogue --wip
 
+# Same, then keep watching: each save auto-plays the new edits
+gitlogue --listen
+# gitlogue --wip --listen
+
 # First-parent walk from main to feature (oldest first)
 gitlogue main..feature
 
@@ -38,6 +42,7 @@ gitlogue --inspect --script --seed 1
 
 - `--repo` walks up to `.git`
 - `--wip` plays uncommitted changes against HEAD (`git diff HEAD`; untracked files are omitted)
+- `--listen` implies `--wip`, stays open, and auto-plays new worktree edits as you save (polls every 200ms; still omits untracked files)
 - `--commits N` caps how many commits to play (single revision defaults to 1; `A..B` defaults to the whole range)
 - `--file` filters by path, basename, or glob
 - `--speed` initial multiplier (any value `> 0`); during playback `-` / `←` halve, `+` / `→` double, with no cap

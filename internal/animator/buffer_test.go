@@ -59,3 +59,21 @@ func TestStageResetFileLeavesSiblings(t *testing.T) {
 		t.Fatalf("sibling a.txt should keep typed text, got %q", st.File("a.txt").String())
 	}
 }
+
+func TestStageEnsureOrigKeepsFirstHEAD(t *testing.T) {
+	t.Parallel()
+	st := NewStage(map[string]string{"a.txt": "HEAD\n"})
+	st.EnsureOrig("a.txt", "other\n")
+	st.EnsureOrig("b.txt", "B\n")
+	orig := st.OrigContents()
+	if orig["a.txt"] != "HEAD\n" {
+		t.Fatalf("EnsureOrig must not overwrite, got %q", orig["a.txt"])
+	}
+	if orig["b.txt"] != "B\n" {
+		t.Fatalf("new orig = %q", orig["b.txt"])
+	}
+	live := st.LiveContents()
+	if _, ok := live["b.txt"]; ok {
+		t.Fatal("EnsureOrig should not open the file")
+	}
+}

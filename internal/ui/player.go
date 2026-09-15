@@ -13,6 +13,7 @@ import (
 	"github.com/xxlv/gitlogue-go/internal/gitengine"
 	"github.com/xxlv/gitlogue-go/internal/highlighter"
 	"github.com/xxlv/gitlogue-go/internal/scheduler"
+	"github.com/xxlv/gitlogue-go/internal/watch"
 )
 
 // Model is the Elm-architecture player. The scheduler owns time; the stage
@@ -66,6 +67,15 @@ type Model struct {
 	// install() clears browsing, so this flag must survive that reset or the
 	// next frame would treat the parked commit as Done and auto-play the next.
 	inspecting bool
+
+	// listen keeps --wip open and auto-plays each new worktree snapshot.
+	listen    bool
+	listenSig string
+	listenCmd func(string) tea.Cmd
+	listenErr string
+
+	// Seed is forwarded to animator.Compile when listen rebuilds a script.
+	Seed int64
 }
 
 // NewPlayer constructs a dual-pane player for a single compiled script.
@@ -83,9 +93,13 @@ func stageFromDiff(diff *gitengine.CommitDiff) *animator.Stage {
 	return animator.NewStage(old)
 }
 
-// Init starts the 60 FPS heartbeat.
+// Init starts the 60 FPS heartbeat, and the worktree listener when enabled.
 func (m Model) Init() tea.Cmd {
-	return scheduler.Tick(m.fps)
+	cmds := []tea.Cmd{scheduler.Tick(m.fps)}
+	if m.listenCmd != nil {
+		cmds = append(cmds, m.listenCmd(m.listenSig))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model.
@@ -95,6 +109,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case watch.Msg:
+		return m, m.applyListen(msg)
 
 	case scheduler.FrameMsg:
 		dt := scheduler.Interval(m.fps)
@@ -174,7 +191,11 @@ func (m Model) View() string {
 	b.WriteByte('\n')
 	b.WriteString(body)
 	b.WriteByte('\n')
-	b.WriteString(helpStyle.Render("[Space] pause/resume | [Enter] replay file | [j/k/↑↓] files | [+/-] speed | [PgUp/PgDn] scroll | [v] overlay | [r] restart | [q] quit"))
+	help := "[Space] pause/resume | [Enter] replay file | [j/k/↑↓] files | [+/-] speed | [PgUp/PgDn] scroll | [v] overlay | [r] restart | [q] quit"
+	if m.listen {
+		help = "[listen] auto-play saves · " + help
+	}
+	b.WriteString(helpStyle.Render(help))
 	return b.String()
 }
 
@@ -187,6 +208,9 @@ func (m Model) renderStatus(snap scheduler.Snapshot) string {
 	icon := "▶"
 	if snap.Done && m.idx+1 >= len(m.tracks) {
 		icon = "■"
+		if m.listen {
+			icon = "◉"
+		}
 	} else if m.between || !snap.Playing {
 		icon = "⏸"
 	}
@@ -199,6 +223,9 @@ func (m Model) renderStatus(snap scheduler.Snapshot) string {
 	hash := m.hash
 	if hash == "" {
 		hash = "replay"
+	}
+	if m.listen {
+		hash = "LISTEN " + hash
 	}
 	n := len(m.tracks)
 	if n < 1 {
@@ -262,6 +289,9 @@ func (m Model) renderCredits() string {
 		}
 		parts = append(parts, bit)
 	}
+	if m.listenErr != "" {
+		return dimStyle.MaxWidth(width).Render("listen: " + m.listenErr)
+	}
 	if len(parts) == 0 {
 		return dimStyle.MaxWidth(width).Render("—")
 	}
@@ -320,6 +350,9 @@ func (m Model) renderEditor(width, height int) string {
 	}
 	if n == 0 {
 		msg := "  waiting for first keystroke"
+		if m.listen {
+			msg = "  listening · save a tracked file"
+		}
 		if inReview || m.showingFinal() {
 			msg = "  (empty file)"
 		}

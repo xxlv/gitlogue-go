@@ -26,6 +26,10 @@ gitlogue 7a8b9c0
 # 回放工作区相对 HEAD 的未提交改动（暂存 + 未暂存）
 gitlogue --wip
 
+# 同样，然后持续监听：每次保存自动播放新增改动
+gitlogue --listen
+# gitlogue --wip --listen
+
 # main 到 feature 的 first-parent 演进（最旧的先播）
 gitlogue main..feature
 
@@ -38,6 +42,7 @@ gitlogue --inspect --script --seed 1
 
 - `--repo` 向上查找 `.git`
 - `--wip` 回放相对 HEAD 的未提交改动（等价 `git diff HEAD`，不含未跟踪文件）
+- `--listen` 隐含 `--wip`，TUI 不退出，保存后自动播放新增改动（每 200ms 轮询工作区；仍不含未跟踪文件）
 - `--commits N` 限制条数（单 revision 默认 1；`A..B` 默认整段）
 - `--file` 按路径、basename 或 glob 过滤
 - `--speed` 初始倍速（任意 `> 0`）；播放中用 `-` / `←` 减半，`+` / `→` 加倍，没有上限

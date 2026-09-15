@@ -162,6 +162,45 @@ func (s *Stage) ResetFile(path string) {
 	s.current = buf
 }
 
+// LiveContents is path → current buffer text for files the stage has opened.
+func (s *Stage) LiveContents() map[string]string {
+	if s == nil {
+		return nil
+	}
+	out := make(map[string]string, len(s.files))
+	for path, buf := range s.files {
+		out[path] = buf.String()
+	}
+	return out
+}
+
+// OrigContents is path → HEAD (or install-time) text.
+func (s *Stage) OrigContents() map[string]string {
+	if s == nil {
+		return nil
+	}
+	out := make(map[string]string, len(s.orig))
+	for path, old := range s.orig {
+		out[path] = old
+	}
+	return out
+}
+
+// EnsureOrig records HEAD text for path so a later revert can find it.
+// Existing orig entries are left unchanged.
+func (s *Stage) EnsureOrig(path, old string) {
+	if s == nil || path == "" {
+		return
+	}
+	if s.orig == nil {
+		s.orig = make(map[string]string)
+	}
+	if _, ok := s.orig[path]; ok {
+		return
+	}
+	s.orig[path] = old
+}
+
 func (s *Stage) ensure(path string) *Buffer {
 	if buf, ok := s.files[path]; ok {
 		return buf
